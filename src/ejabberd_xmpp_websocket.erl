@@ -63,6 +63,7 @@
 	       }).
 
 start(Host, Sid, Key, IP) ->
+    ?WARNING_MSG("start === ~p, ~p, ~p, ~p", [Sid, Key, IP]),
     Proc = gen_mod:get_module_proc(Host, ejabberd_mod_websocket),
     case catch supervisor:start_child(Proc, [Sid, Key, IP]) of
     	{ok, Pid} -> {ok, Pid};
@@ -71,6 +72,7 @@ start(Host, Sid, Key, IP) ->
             {error, "Cannot start XMPP, Websocket session"}
     end.
 start_link(Sid, Key, IP) ->
+    ?WARNING_MSG("start_link === ~p, ~p, ~p, ~p", [Sid, Key, IP]),
     gen_fsm:start_link(?MODULE, [Sid, Key, IP], []).
 
 send({xmpp_websocket, FsmRef, _IP}, Packet) ->
@@ -103,6 +105,7 @@ change_shaper({xmpp_websocket, FsmRef, _IP}, Shaper) ->
     gen_fsm:send_all_state_event(FsmRef, {change_shaper, Shaper}).
 
 monitor({xmpp_websocket, FsmRef, _IP}) ->
+    ?INFO_MSG("======== monitor: ~p", [FsmRef]),
     erlang:monitor(process, FsmRef).
 
 close({xmpp_websocket, FsmRef, _IP}) ->
@@ -116,6 +119,7 @@ peername({xmpp_websocket, _FsmRef, IP}) ->
 
 %% entry point for websocket data
 process_request(WSockMod, WSock, FsmRef, Data, IP) ->
+    ?WARNING_MSG("process_request~n~p", [Data]),
     Opts1 = ejabberd_c2s_config:get_c2s_limits(),
     Opts = [{xml_socket, true} | Opts1],
     MaxStanzaSize =
@@ -131,7 +135,7 @@ process_request(WSockMod, WSock, FsmRef, Data, IP) ->
                                       (FsmRef =:= undefined) ->
                     case start(Host, Sid, Key, IP) of
                         {ok, Pid} ->
-                            ?DEBUG("Session Pid:~p~n",[Pid]),
+                            ?WARNING_MSG("Session Pid:~p~n",[Pid]),
                             gen_fsm:sync_send_all_state_event(
                               Pid,
                               #wsr{sockmod=WSockMod,
@@ -143,7 +147,7 @@ process_request(WSockMod, WSock, FsmRef, Data, IP) ->
                     end;
                 {_Host, _Sid, _Key} when (FsmRef =/= false) or
                                          (FsmRef =/= undefined) ->
-                    ?DEBUG("Stream restart after c2s started. ~p~n",
+                    ?WARNING_MSG("Stream restart after c2s started. ~p~n",
                            [FsmRef]),
                     send_data(FsmRef, #wsr{sockmod=WSockMod,
                                            socket=WSock,
@@ -160,7 +164,7 @@ process_request(WSockMod, WSock, FsmRef, Data, IP) ->
                     {Data, <<>>, FsmRef}
             end;
         _ ->
-            ?DEBUG("Bad Request: ~p~n", [Data]),
+            ?WARNING_MSG("Bad Request: ~p~n", [Data]),
             {<<"bad request">>, <<>>, FsmRef}
     end.
 
@@ -176,7 +180,7 @@ process_request(WSockMod, WSock, FsmRef, Data, IP) ->
 %%          {stop, StopReason}
 %%----------------------------------------------------------------------
 init([Sid, Key, IP]) ->
-    ?DEBUG("started: ~p", [{Sid, Key, IP}]),
+    ?WARNING_MSG("started: ~p", [{Sid, Key, IP}]),
     Opts1 = ejabberd_c2s_config:get_c2s_limits(),
     Opts = [{xml_socket, true} | Opts1],
 
@@ -524,15 +528,15 @@ attrs_tostring(Str,[X|Rest]) ->
     attrs_tostring([Str,AttrStr], Rest).
 
 %% Tests
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-stream_start_end_test() ->
-    false = stream_start_end("stream no xml"),
-    {xmlstreamstart, _X, _Y} = stream_start_end("<stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client' to='localhost' version='1.0'>"),
-    {xmlstreamend, _Z} = stream_start_end("</stream:stream>").
-streamstart_tobinary_test() ->
-    TestStr =     <<"<stream:stream to='localhost' xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client' version='1.0'>">>,
-    io:format("~p~n",[streamstart_tobinary({xmlstreamstart, "stream:stream", [{"to","localhost"}, {"xmlns:stream","http://etherx.jabber.org/streams"}, {"xmlns","jabber:client"}, {"version","1.0"}]})]),
-    io:format("~p~n",[TestStr]),
-    TestStr = streamstart_tobinary({xmlstreamstart, "stream:stream", [{"to","localhost"}, {"xmlns:stream","http://etherx.jabber.org/streams"}, {"xmlns","jabber:client"}, {"version","1.0"}]}).
--endif.
+%-ifdef(TEST).
+%-include_lib("eunit/include/eunit.hrl").
+%stream_start_end_test() ->
+%    false = stream_start_end("stream no xml"),
+%    {xmlstreamstart, _X, _Y} = stream_start_end("<stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client' to='localhost' version='1.0'>"),
+%    {xmlstreamend, _Z} = stream_start_end("</stream:stream>").
+%streamstart_tobinary_test() ->
+%    TestStr =     <<"<stream:stream to='localhost' xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client' version='1.0'>">>,
+%    io:format("~p~n",[streamstart_tobinary({xmlstreamstart, "stream:stream", [{"to","localhost"}, {"xmlns:stream","http://etherx.jabber.org/streams"}, {"xmlns","jabber:client"}, {"version","1.0"}]})]),
+%    io:format("~p~n",[TestStr]),
+%    TestStr = streamstart_tobinary({xmlstreamstart, "stream:stream", [{"to","localhost"}, {"xmlns:stream","http://etherx.jabber.org/streams"}, {"xmlns","jabber:client"}, {"version","1.0"}]}).
+%-endif.

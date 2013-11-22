@@ -48,6 +48,7 @@ start_link(SockData, Opts) ->
     {ok, proc_lib:spawn_link(ejabberd_websocket, init, [SockData, Opts])}.
 
 init({SockMod, Socket}, Opts) ->
+%%    ?INFO_MSG("--- init ~p ---", [Opts]),
     TLSEnabled = lists:member(tls, Opts),
     TLSOpts1 = lists:filter(fun({certfile, _}) -> true;
 			      (_) -> false
@@ -73,7 +74,7 @@ init({SockMod, Socket}, Opts) ->
 	    {value, {request_handlers, H}} -> H;
 	    false -> []
         end,
-    ?INFO_MSG("started: ~p", [{SockMod1, Socket1}]),
+    ?INFO_MSG("==== started: ~p", [{SockMod1, Socket1}]),
     State = #state{sockmod = SockMod1,
                    socket = Socket1,
                    request_handlers = RequestHandlers},
@@ -88,24 +89,25 @@ receive_headers(State) ->
     SockMod = State#state.sockmod,
     Socket = State#state.socket,
     Data = SockMod:recv(Socket, 0, 300000),
-    ?DEBUG("Data in ~p: headers : ~p",[State, Data]),
+    ?INFO_MSG("receive_headers ~p", [Data]),
     case State#state.sockmod of
         gen_tcp ->
-            NewState = process_header(State, Data),
+            NewState = process_header(State, Data), %% parse each key-value
             case NewState#state.end_of_request of
                 true ->
                     ok;
-                _ ->
+                _ -> %% parse next key-value in header
                     receive_headers(NewState)
             end;
         _ ->
             case Data of
                 {ok, Binary} ->
-                    ?DEBUG("not gen_tcp, ssl? ~p~n", [Binary]),
+                    ?INFO_MSG("not gen_tcp, ssl? ~p~n", [Binary]),
                     {Request, Trail} = parse_request(
                                          State,
 					 State#state.trail ++
                                          binary_to_list(Binary)),
+                    ?INFO_MSG("Request ~p -> process_header", []),
 		    State1 = State#state{trail = Trail},
 		    NewState = lists:foldl(
 				 fun(D, S) ->
@@ -118,12 +120,13 @@ receive_headers(State) ->
 				 end, State1, Request),
 		    case NewState#state.end_of_request of
 			true ->
+                            ?INFO_MSG("end_of_request0 ~p", [NewState#state.request_headers]),
 			    ok;
 			_ ->
 			    receive_headers(NewState)
 		    end;
                 Req ->
-                    ?DEBUG("not gen_tcp or ok: ~p~n", [Req]),
+                    ?INFO_MSG("not gen_tcp or ok: ~p~n", [Req]),
                     ok
             end
     end.
@@ -173,15 +176,13 @@ process_header(State, Data) ->
 	    ?WARNING_MSG("An HTTP request without 'Host' HTTP header was received.", []),
 	    throw(http_request_no_host_header);
         {ok, http_eoh} ->
-	    ?DEBUG("(~w) http query: ~w ~s~n",
-		   [State#state.socket,
-		    State#state.request_method,
-		    element(2, State#state.request_path)]),
+            ?INFO_MSG("end_of_request1 ~p", [State#state.request_headers]),
             Out = process_request(State),
+            ?INFO_MSG("out = ~p", [Out]),
             %% Test for web socket
             case (Out =/= false) and is_websocket_upgrade(State#state.request_headers) of
                 true ->
-                    ?DEBUG("Websocket!",[]),
+                    ?INFO_MSG("Websocket! ~p",[Data]),
                     SockMod = State#state.sockmod,
                     Socket = State#state.socket,
                     case SockMod of
@@ -190,6 +191,7 @@ process_header(State, Data) ->
                         _ ->
                             ok
                     end,
+                    ?INFO_MSG("handshake(~n~p~n)", [State]),
                     %% handle hand shake
                     case handshake(State) of
                         true ->
@@ -200,17 +202,17 @@ process_header(State, Data) ->
                                            socket = Socket,
                                            request_handlers = State#state.request_handlers};
                                 _ ->
-                                    ?DEBUG("Bad sub protocol",[]),
+                                    ?INFO_MSG("Bad sub protocol",[]),
                                     #state{end_of_request = true,
                                            request_handlers = State#state.request_handlers}
                             end;
                         _ ->
-                            ?DEBUG("Bad Handshake",[]),
+                            ?INFO_MSG("Bad Handshake",[]),
                             #state{end_of_request = true,
                                    request_handlers = State#state.request_handlers}
                     end;
                 _ ->
-                    ?DEBUG("Regular HTTP",[]),
+                    ?INFO_MSG("Regular HTTP",[]),
                     #state{end_of_request = true,
                            request_handlers = State#state.request_handlers}
             end;
@@ -220,7 +222,7 @@ process_header(State, Data) ->
             #state{end_of_request = true,
                    request_handlers = State#state.request_handlers};
         {error, timeout} ->
-            ?DEBUG("Socket recv timed out. Return the same State.",[]),
+            ?INFO_MSG("Socket recv timed out. Return the same State.",[]),
             State;
         {ok, HData} ->
             PData = case State#state.partial of
@@ -237,7 +239,7 @@ process_header(State, Data) ->
                                        Error ->
                                            {Error, undefined, undefined}
                                    end,
-            ?DEBUG("C2SPid:~p~n",[Pid]),
+            ?INFO_MSG("C2SPid:~p~n",[Pid]),
             case Pid of
                 false ->
                     #state{sockmod = State#state.sockmod,
@@ -252,7 +254,7 @@ process_header(State, Data) ->
                            request_handlers = State#state.request_handlers}
             end;
         _ ->
-            ?DEBUG("Not expected: ~p~n",[Data]),
+            ?INFO_MSG("Not expected: ~p~n",[Data]),
             #state{end_of_request = true,
                    request_handlers = State#state.request_handlers}
     end.
@@ -263,14 +265,15 @@ add_header(Name, Value, State) ->
 is_websocket_upgrade(RequestHeaders) ->
     Connection = {'Connection', "Upgrade"} == lists:keyfind('Connection', 1,
                                                             RequestHeaders),
-    Upgrade = {'Upgrade', "WebSocket"} == lists:keyfind('Upgrade', 1,
-                                                        RequestHeaders),
+    {Up, WS} = lists:keyfind('Upgrade', 1, RequestHeaders),
+    Upgrade = {'Upgrade', "websocket"} == {Up, string:to_lower(WS)},
+    ?INFO_MSG("Connection ~p, Upgrade ~p", [Connection, Upgrade]),
     Connection and Upgrade.
 
 handshake(State) ->
     SockMod = State#state.sockmod,
     Socket = State#state.socket,
-    Data = SockMod:recv(Socket, 0, 300000),
+    Data = SockMod:recv(Socket, 0, 300000), %% FIXME: return handshake (Sec-WebSocket-Accept)
     case Data of
         {ok, BinData} ->
             ?DEBUG("Handshake data received.", [State#state.request_headers]),
@@ -369,17 +372,18 @@ process_request(#state{request_method = Method,
                                  wsocket = Socket,
                                  wsockmod = SockMod
                                 },
-            ?INFO_MSG("Processing request:~p:~p~n",[Request, State]),
+            ?INFO_MSG("Processing request:~n~p:~p~n",[Request, State]),
             process(RequestHandlers, Request)
     end;
 process_request(State) ->
-    ?DEBUG("Not a handshake: ~p~n", [State]),
+    ?WARNING_MSG("Not a handshake: ~p~n", [State]),
     false.
 %% process web socket requests, if no handler found return false.
 process([], _) ->
     false;
 process(RequestHandlers, Request) ->
     [{HandlerPathPrefix, HandlerModule} | HandlersLeft] = RequestHandlers,
+    ?INFO_MSG("PathPrefix ~p, HandlerModule ~p, Left ~p", [HandlerPathPrefix, HandlerModule, HandlersLeft]),
     case (lists:prefix(HandlerPathPrefix, Request#wsrequest.path) or
           (HandlerPathPrefix==Request#wsrequest.path)) of
 	true ->
