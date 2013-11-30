@@ -1,0 +1,52 @@
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>Simple client</title>
+    <script type="text/javascript" src="js/jquery-1.9.1.js"></script>
+    <script type="text/javascript" src="js/jquery-ui-1.10.2.js"></script>
+    <script type="text/javascript" src="js/strophe.js"></script>
+    <script type="text/javascript" src="js/strophe.websocket.js"></script>
+    <script type="text/javascript" src="js/xmppws.js"></script>
+
+    <style>
+      .log{
+           width:45%;
+           float:left;
+           margin:20px;
+       }
+      .login {
+        width:30%;
+        float:left;
+        margin:20px;
+      }
+      .log textarea{
+           height:200px;
+           width:100%;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div><dl>
+      <dt>JID</dt>
+      <dt><input type="text" id="jid" value="user2"></dt>
+      <dt>Password</dt>
+      <dt><input type="password" id="pass" value="123456"></dt>
+      <dt>
+        <button type="button" id="signin">Sign in</button>
+      </dt>
+    </div></dl>
+
+    <div>
+      <label>To:</label>
+      <input type="text" id="chatwith">
+      <input type="text" id="msg">
+      <button type=button" id="send">Send</button>
+    </div>
+    
+    <div>
+      <div>Incomming:</div>
+      <div height="350px" width="250px" id="incomming"></div>
+    </div>
+  </body>
+</html>
