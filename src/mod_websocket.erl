@@ -1,13 +1,13 @@
 %%%----------------------------------------------------------------------
 %%% File    : mod_websocket.erl
-%%% Author  : Nathan Zorn <nathan.zorn@gmail.com>
+%%% Author  : Cuong Thai <bronzeboyvn@gmail.com>
 %%% Purpose : XMPP over websockets
 %%%----------------------------------------------------------------------
 
 -module(mod_websocket).
--author('nathan.zorn@gmail.com').
+-author('bronzeboyvn@gmail.com').
 
--define(MOD_WEBSOCKET_VERSION, "0.1").
+-define(MOD_WEBSOCKET_VERSION, "1.0").
 -define(TEST, ok).
 -define(PROCNAME_MHB, ejabberd_mod_websocket).
 

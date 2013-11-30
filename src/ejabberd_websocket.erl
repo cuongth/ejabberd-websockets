@@ -1,11 +1,11 @@
 %%%----------------------------------------------------------------------
 %%% File    : ejabberd_websocket.erl
-%%% Author  : Nathan Zorn <nathan.zorn@gmail.com>
+%%% Author  : Cuong Thai <bronzeboyvn@gmail.com>
 %%% Purpose : Listener for XMPP over websockets
 %%%----------------------------------------------------------------------
 
 -module(ejabberd_websocket).
--author('nathan.zorn@gmail.com').
+-author('bronzeboyvn@gmail.com').
 
 %% External Exports
 -export([start/2,
@@ -274,6 +274,9 @@ handshake(State) ->
     SockMod = State#state.sockmod,
     Socket = State#state.socket,
     Data = SockMod:recv(Socket, 0, 300000), %% FIXME: return handshake (Sec-WebSocket-Accept)
+    %% AddedKey = Key ++ "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+    %% Sha1 = crypto:sha(ReturnKey),
+    %% ReturnedKey = base64:encode(Sha1),
     case Data of
         {ok, BinData} ->
             ?DEBUG("Handshake data received.", [State#state.request_headers]),
