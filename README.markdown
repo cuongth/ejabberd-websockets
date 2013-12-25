@@ -2,7 +2,7 @@
 
 This is a module that adds websocket support for the [ejabberd](http://www.ejabberd.im/) XMPP server. It's a more elegant, modern and faster replacement to Bosh.
 
-It is an implementation of the [XMPP Over Websocket Draft](http://tools.ietf.org/html/draft-moffitt-xmpp-over-websocket-00) proposed by Jack Moffitt and Eric Cstari. The Websocket implementation is based on this [draft specification](http://tools.ietf.org/html/draft-ietf-hybi-thewebsocketprotocol-03).
+It will be an implementation of the [XMPP Over Websocket Draft](http://tools.ietf.org/html/draft-moffitt-xmpp-over-websocket-00) proposed by Jack Moffitt and Eric Cestari. The Websocket implementation is based on this [The WebSocket Protocol](http://tools.ietf.org/html/rfc6455).
 
 **You need to use the apt version of ejabberd, as the binary install comes with an old version of erlang. **
 
@@ -33,7 +33,8 @@ You may find it convenient to use directly [Strophejs](https://github.com/metaja
 To setup a connection :
 <code>
 	// WS_SERVICE should be http://host.tld:5288/ws-xmpp, based on the configuration you chose.
-	connection = new Strophe.Connection({protocol: new Strophe.Websocket(WS_SERVICE) });
+        // strophe1.1.0
+        connection = new Strophe.Connection("ws://<ip>:5288/ws-xmpp", {protocol: "ws"});
 </code>
 
 
