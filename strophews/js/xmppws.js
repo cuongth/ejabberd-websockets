@@ -5,8 +5,8 @@ xmppws.demo = {
   jid: "",
   appName: 'demo',
   domainName: '192.168.1.179',
-  WS: "ws://192.168.1.179:5000/",
-//  WS: "ws://192.168.1.179:5288/ws-xmpp",
+//  WS: "ws://192.168.1.179:5000/",
+  WS: "ws://192.168.1.179:5288/ws-xmpp",
   BOSH: "http://192.168.1.179:5280/http-bind/",
 
   init: function() {
@@ -56,8 +56,10 @@ xmppws.demo = {
   },
 
   connect: function(chatjid, password) {
-//    var conn = new Strophe.WebSocket(xmppws.demo.WS);
-    var conn = new Strophe.Connection("ws://192.168.1.179:5000/", {protocol: "ws"});
+// mod_websocket
+    var conn = new Strophe.Connection(xmppws.demo.WS, {protocol: "ws"});
+// jabsocket proxy
+//    var conn = new Strophe.Connection("ws://192.168.1.179:5000/", {protocol: "ws"});
     xmppws.demo.jid = chatjid+"@"+xmppws.demo.domainName;
     console.log(chatjid + ":" + password);
     conn.connect(xmppws.demo.jid, password, function (status) {
