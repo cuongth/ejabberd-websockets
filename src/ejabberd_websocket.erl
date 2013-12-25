@@ -42,483 +42,377 @@
 -define(MAXKEY_LENGTH, 4294967295).
 %% Supervisor Start
 start(SockData, Opts) ->
-    supervisor:start_child(ejabberd_websocket_sup, [SockData, Opts]).
+  supervisor:start_child(ejabberd_websocket_sup, [SockData, Opts]).
 
 start_link(SockData, Opts) ->
-    {ok, proc_lib:spawn_link(ejabberd_websocket, init, [SockData, Opts])}.
+  {ok, proc_lib:spawn_link(ejabberd_websocket, init, [SockData, Opts])}.
 
 init({SockMod, Socket}, Opts) ->
-%%    ?INFO_MSG("--- init ~p ---", [Opts]),
-    TLSEnabled = lists:member(tls, Opts),
-    TLSOpts1 = lists:filter(fun({certfile, _}) -> true;
-			      (_) -> false
-			   end, Opts),
-    TLSOpts = [verify_none | TLSOpts1],
-    {SockMod1, Socket1} =
-	if
-	    TLSEnabled ->
-		inet:setopts(Socket, [{recbuf, 8192}]),
-		{ok, TLSSocket} = tls:tcp_to_tls(Socket, TLSOpts),
-		{tls, TLSSocket};
-	    true ->
-		{SockMod, Socket}
-	end,
-    case SockMod1 of
-	gen_tcp ->
-	    inet:setopts(Socket1, [{packet, http}, {recbuf, 8192}]);
-	_ ->
-	    ok
+  TLSEnabled = lists:member(tls, Opts),
+  TLSOpts1 = lists:filter(
+      fun({certfile, _}) -> true;
+      (_) -> false
+  end, Opts),
+  TLSOpts = [verify_none | TLSOpts1],
+  {SockMod1, Socket1} =
+    if
+      TLSEnabled ->
+        inet:setopts(Socket, [{recbuf, 8192}]),
+        {ok, TLSSocket} = tls:tcp_to_tls(Socket, TLSOpts),
+        {tls, TLSSocket};
+      true ->
+        {SockMod, Socket}
     end,
-    RequestHandlers =
-	case lists:keysearch(request_handlers, 1, Opts) of
-	    {value, {request_handlers, H}} -> H;
-	    false -> []
-        end,
-    ?INFO_MSG("==== started: ~p", [{SockMod1, Socket1}]),
-    State = #state{sockmod = SockMod1,
-                   socket = Socket1,
-                   request_handlers = RequestHandlers},
-    receive_headers(State).
+  case SockMod1 of
+    gen_tcp ->
+      inet:setopts(Socket1, [{packet, http}, {recbuf, 8192}]);
+    _ ->
+      ok
+  end,
+  RequestHandlers = case lists:keysearch(request_handlers, 1, Opts) of
+    {value, {request_handlers, H}} -> H;
+    false -> []
+  end,
+  State = #state{sockmod = SockMod1,
+      socket = Socket1,
+      request_handlers = RequestHandlers},
+  receive_headers(State).
 
 become_controller(_Pid) ->
-    ok.
+  ok.
 socket_type() ->
-    raw.
+  raw.
 
 receive_headers(State) ->
-    SockMod = State#state.sockmod,
-    Socket = State#state.socket,
-    Data = SockMod:recv(Socket, 0, 300000),
-    ?INFO_MSG("receive_headers ~p", [Data]),
-    case State#state.sockmod of
-        gen_tcp ->
-            NewState = process_header(State, Data), %% parse each key-value
-            case NewState#state.end_of_request of
-                true ->
-                    ok;
-                _ -> %% parse next key-value in header
-                    receive_headers(NewState)
-            end;
-        _ ->
-            case Data of
-                {ok, Binary} ->
-                    ?INFO_MSG("not gen_tcp, ssl? ~p~n", [Binary]),
-                    {Request, Trail} = parse_request(
-                                         State,
-					 State#state.trail ++
-                                         binary_to_list(Binary)),
-                    ?INFO_MSG("Request ~p -> process_header", []),
-		    State1 = State#state{trail = Trail},
-		    NewState = lists:foldl(
-				 fun(D, S) ->
-                                         case S#state.end_of_request of
-                                             true ->
-                                                 S;
-                                             _ ->
-                                                 process_header(S, D)
-                                         end
-				 end, State1, Request),
-		    case NewState#state.end_of_request of
-			true ->
-                            ?INFO_MSG("end_of_request0 ~p", [NewState#state.request_headers]),
-			    ok;
-			_ ->
-			    receive_headers(NewState)
-		    end;
-                Req ->
-                    ?INFO_MSG("not gen_tcp or ok: ~p~n", [Req]),
-                    ok
-            end
-    end.
+  SockMod = State#state.sockmod,
+  Socket = State#state.socket,
+  Data = SockMod:recv(Socket, 0, 300000),
+%%  ?INFO_MSG("receive_headers ~p", [Data]),
+  case State#state.sockmod of
+    gen_tcp ->
+      NewState = process_header(State, Data), %% parse each key-value
+      case NewState#state.end_of_request of
+        true ->
+          ok;
+        _ -> %% parse next key-value in header
+          receive_headers(NewState)
+      end;
+    _ ->
+      case Data of
+        {ok, Binary} ->
+          ?INFO_MSG("not gen_tcp, ssl? ~p~n", [Binary]),
+          {Request, Trail} = parse_request(State, State#state.trail ++ binary_to_list(Binary)),
+          ?INFO_MSG("Request ~p -> process_header", []),
+          State1 = State#state{trail = Trail},
+          NewState = lists:foldl(
+              fun(D, S) ->
+                case S#state.end_of_request of
+                  true ->
+                    S;
+                  _ ->
+                    process_header(S, D)
+                end
+              end, State1, Request),
+          case NewState#state.end_of_request of
+            true -> ok;
+            _ -> receive_headers(NewState)
+          end;
+        Req ->
+          ?INFO_MSG("not gen_tcp or ok: ~p~n", [Req]),
+          ok
+      end
+  end.
 
 process_header(State, Data) ->
-    case Data of
-	{ok, {http_request, Method, Uri, Version}} ->
-            KeepAlive = case Version of
-		{1, 1} ->
-		    true;
-		_ ->
-		    false
-	    end,
-	    Path = case Uri of
-	        {absoluteURI, _Scheme, _Host, _Port, P} -> {abs_path, P};
-	        _ -> Uri
-	    end,
-	    State#state{request_method = Method,
-			request_version = Version,
-			request_path = Path,
-			request_keepalive = KeepAlive};
-        {ok, {http_header, _, 'Connection'=Name, _, Conn}} ->
-	    KeepAlive1 = case jlib:tolower(Conn) of
-			     "keep-alive" ->
-				 true;
-			     "close" ->
-				 false;
-			     _ ->
-				 State#state.request_keepalive
-			 end,
-	    State#state{request_keepalive = KeepAlive1,
-			request_headers=add_header(Name, Conn, State)};
-	{ok, {http_header, _, 'Content-Length'=Name, _, SLen}} ->
-	    case catch list_to_integer(SLen) of
-		Len when is_integer(Len) ->
-		    State#state{request_content_length = Len,
-				request_headers=add_header(Name, SLen, State)};
-		_ ->
-		    State
-	    end;
-	{ok, {http_header, _, 'Host'=Name, _, Host}} ->
-	    State#state{request_host = Host,
-			request_headers=add_header(Name, Host, State)};
-	{ok, {http_header, _, Name, _, Value}} ->
-	    State#state{request_headers=add_header(Name, Value, State)};
-	{ok, http_eoh} when State#state.request_host == undefined ->
-	    ?WARNING_MSG("An HTTP request without 'Host' HTTP header was received.", []),
-	    throw(http_request_no_host_header);
-        {ok, http_eoh} ->
-            ?INFO_MSG("end_of_request1 ~p", [State#state.request_headers]),
-%%            Out = process_request(State),
-%%            ?INFO_MSG("out = ~p", [Out]),
-            %% Test for web socket
-            case sec_websocket_version(State) of
-                false ->
-                    ?INFO_MSG("Regular HTTP",[]),
-                    #state{end_of_request = true,
-                           request_handlers = State#state.request_handlers};
-%%            case (Out =/= false) and is_websocket_upgrade(State#state.request_headers) of
-                Ver ->
-                    ?INFO_MSG("Websocket! ~p",[Data]),
-                    SockMod = State#state.sockmod,
-                    Socket = State#state.socket,
-                    case SockMod of
-                        gen_tcp ->
-                            inet:setopts(Socket, [{packet, raw}]);
-                        _ ->
-                            ok
-                    end,
-                    ?INFO_MSG("version: ~p~nhandshake(~p)", [Ver, State]),
-                    %% handle hand shake
-                    case handshake(State) of
-                        true ->
-                            case sub_protocol(State#state.request_headers) of
-                                "xmpp" ->
-                                    %% send the state back
-                                    #state{sockmod = SockMod,
-                                           socket = Socket,
-                                           request_handlers = State#state.request_handlers};
-                                _ ->
-                                    ?INFO_MSG("Bad sub protocol",[]),
-                                    #state{end_of_request = true,
-                                           request_handlers = State#state.request_handlers}
-                            end;
-                        _ ->
-                            ?INFO_MSG("Bad Handshake",[]),
-                            #state{end_of_request = true,
-                                   request_handlers = State#state.request_handlers}
-                    end%;
-%                _ ->
-%                    ?INFO_MSG("Regular HTTP",[]),
-%                    #state{end_of_request = true,
-%                           request_handlers = State#state.request_handlers}
-            end;
-        {error, closed} ->
-            ?ERROR_MSG("Socket closed", [State]),
-            process_data(State, socket_closed),
-            #state{end_of_request = true,
-                   request_handlers = State#state.request_handlers};
-        {error, timeout} ->
-            ?INFO_MSG("Socket recv timed out. Return the same State.",[]),
-            State;
-        {ok, HData} ->
-            PData = case State#state.partial of
-                        <<>> ->
-                            HData;
-                        <<X/binary>> ->
-                            <<X, HData>>
-                    end,
-            {_Out, Partial, Pid} = case process_data(State, PData) of
-                                       {O, P} ->
-                                           {O, P, false};
-                                       {Output, Part, ProcId} ->
-                                           {Output, Part, ProcId};
-                                       Error ->
-                                           {Error, undefined, undefined}
-                                   end,
-            ?INFO_MSG("C2SPid:~p~n",[Pid]),
-            case Pid of
-                false ->
-                    #state{sockmod = State#state.sockmod,
-                           socket = State#state.socket,
-                           partial = Partial,
-                           request_handlers = State#state.request_handlers};
-                _ ->
-                    #state{sockmod = State#state.sockmod,
-                           socket = State#state.socket,
-                           partial = Partial,
-                           websocket_pid = Pid,
-                           request_handlers = State#state.request_handlers}
-            end;
+  case Data of
+    {ok, {http_request, Method, Uri, Version}} ->
+      KeepAlive = case Version of
+        {1, 1} -> true;
+        _ -> false
+      end,
+      Path = case Uri of
+        {absoluteURI, _Scheme, _Host, _Port, P} -> {abs_path, P};
+        _ -> Uri
+      end,
+      State#state{request_method = Method, request_version = Version,
+          request_path = Path, request_keepalive = KeepAlive};
+    {ok, {http_header, _, 'Connection'=Name, _, Conn}} ->
+      KeepAlive1 = case jlib:tolower(Conn) of
+        "keep-alive" -> true;
+        "close" -> false;
+        _ -> State#state.request_keepalive
+      end,
+      State#state{request_keepalive = KeepAlive1,
+          request_headers=add_header(Name, Conn, State)};
+    {ok, {http_header, _, 'Content-Length'=Name, _, SLen}} ->
+      case catch list_to_integer(SLen) of
+        Len when is_integer(Len) ->
+          State#state{request_content_length = Len,
+              request_headers=add_header(Name, SLen, State)};
         _ ->
-            ?INFO_MSG("Not expected: ~p~n",[Data]),
-            #state{end_of_request = true,
-                   request_handlers = State#state.request_handlers}
-    end.
+          State
+      end;
+    {ok, {http_header, _, 'Host'=Name, _, Host}} ->
+      State#state{request_host = Host,
+          request_headers=add_header(Name, Host, State)};
+    {ok, {http_header, _, Name, _, Value}} ->
+      State#state{request_headers=add_header(Name, Value, State)};
+    {ok, http_eoh} when State#state.request_host == undefined ->
+      ?WARNING_MSG("An HTTP request without 'Host' HTTP header was received.", []),
+      throw(http_request_no_host_header);
+    {ok, http_eoh} ->
+      AllRequestHeaders = State#state.request_headers,
+      ?INFO_MSG("end_of_request1 ~p", [AllRequestHeaders]),
+      case process_request(State) of
+        false ->
+          ?INFO_MSG("Regular HTTP",[]),
+          #state{end_of_request = true, request_handlers = AllRequestHeaders};
+        Other200 ->
+          ?INFO_MSG("process_request ~p", [Other200]),
+          case sec_websocket_version(State#state.request_headers) of
+            false ->
+              ?INFO_MSG("Can't get websocket version", []),
+              #state{end_of_request = true, request_handlers = AllRequestHeaders};
+            _WebSocketVersion ->
+              SockMod = State#state.sockmod,
+              Socket = State#state.socket,
+              case SockMod of
+                gen_tcp -> inet:setopts(Socket, [{packet, raw}]);
+                _ -> ok
+              end,
+	      case handshake(State) of
+                true ->
+                  ?INFO_MSG("handshake === OK", []),
+                  case sub_protocol(AllRequestHeaders) of
+                    "xmpp" ->
+                      %% send the state back
+                      #state{sockmod = SockMod, socket = Socket,
+                          request_handlers = AllRequestHeaders};
+                    _ ->
+                      ?WARNING_MSG("Bad sub protocol",[]),
+                      #state{end_of_request = true,
+                          request_handlers = AllRequestHeaders}
+                  end;
+                _ ->
+                  ?WARNING_MSG("Bad Handshake",[]),
+                  #state{end_of_request = true,
+                      request_handlers = AllRequestHeaders}
+              end
+          end
+      end;
+    {error, closed} ->
+      ?ERROR_MSG("Socket closed", [State]),
+      process_data(State, socket_closed),
+      #state{end_of_request = true,
+          request_handlers = State#state.request_handlers};
+    {error, timeout} ->
+      ?INFO_MSG("Socket recv timed out. Return the same State.",[]),
+      State;
+    {ok, HData} ->
+      PData = case State#state.partial of
+        <<>> -> HData;
+        <<X/binary>> -> <<X, HData>>
+      end,
+      {_Out, Partial, Pid} = case process_data(State, PData) of
+        {O, P} -> {O, P, false};
+        {Output, Part, ProcId} -> {Output, Part, ProcId};
+        Error -> {Error, undefined, undefined}
+      end,
+      ?INFO_MSG("C2SPid:~p~n",[Pid]),
+      case Pid of
+        false ->
+          #state{sockmod = State#state.sockmod,
+              socket = State#state.socket,
+              partial = Partial,
+              request_handlers = State#state.request_handlers};
+        _ ->
+          #state{sockmod = State#state.sockmod,
+              socket = State#state.socket,
+              partial = Partial,
+              websocket_pid = Pid,
+              request_handlers = State#state.request_handlers}
+      end;
+    _ ->
+      ?INFO_MSG("Not expected: ~p~n",[Data]),
+      #state{end_of_request = true,
+          request_handlers = State#state.request_handlers}
+  end.
 
 add_header(Name, Value, State) ->
-    [{Name, Value} | State#state.request_headers].
+  [{Name, Value} | State#state.request_headers].
 
-sec_websocket_version(State) ->
-    RequestHeaders = State#state.request_headers,
-    Connection = {'Connection', "Upgrade"} == lists:keyfind(
-            'Connection', 1, RequestHeaders),
-    {Up, WS} = lists:keyfind('Upgrade', 1, RequestHeaders),
-    Upgrade = {'Upgrade', "websocket"} == {Up, string:to_lower(WS)},
-    case process_request(State) and Connection and Upgrade of
+sec_websocket_version(RequestHeaders) ->
+  Connection = {'Connection', "Upgrade"} == lists:keyfind(
+      'Connection', 1, RequestHeaders),
+  {Up, WS} = lists:keyfind('Upgrade', 1, RequestHeaders),
+  Upgrade = {'Upgrade', "websocket"} == {Up, string:to_lower(WS)},
+  ?INFO_MSG("0. Connection ~p, Upgrade ~p", [Connection, Upgrade]),
+  case Connection and Upgrade of
+    false ->
+      false;
+    true ->
+      ?INFO_MSG("2. Search Sec-WebSocket-Version", []),
+      case lists:keysearch("Sec-WebSocket-Version", 1, RequestHeaders) of
         false ->
-            false;
-        true ->
-            case lists:keysearch("Sec-WebSocket-Version", 1, RequestHeaders) of
-                false -> false;
-                {value, {_, Version}} -> Version
-            end
-    end.
+          ?INFO_MSG("Fail to get Sec-WebSocket-Version", []),
+          false;
+        {value, {_, Version}} ->
+          ?INFO_MSG("Version ~p", [Version]),
+          Version
+      end
+  end.
 
 handshake(State) ->
-    SockMod = State#state.sockmod,
-    Socket = State#state.socket,
-    Data = SockMod:recv(Socket, 0, 300000), %% FIXME: return handshake (Sec-WebSocket-Accept)
-    %% AddedKey = Key ++ "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
-    %% Sha1 = crypto:sha(ReturnKey),
-    %% ReturnedKey = base64:encode(Sha1),
-    case Data of
-        {ok, BinData} ->
-            ?DEBUG("Handshake data received.", [State#state.request_headers]),
-            {_, Host} = lists:keyfind('Host', 1, State#state.request_headers),
-            {_, Origin} = lists:keyfind("Origin",
-                                        1, State#state.request_headers),
-            SubProto = sub_protocol(State#state.request_headers),
-            {_, Key1} = lists:keyfind("Sec-Websocket-Key1",
-                                      1,
-                                      State#state.request_headers),
-            {_, Key2} = lists:keyfind("Sec-Websocket-Key2",
-                                      1,
-                                      State#state.request_headers),
-            case websocket_verify_keys(Key1, Key2) of
-                {Part1, Part2} ->
-                    Sig = websocket_sign(Part1, Part2, BinData),
-                    %% Build response
-                    Res = build_handshake_response(State#state.socket,
-                                                   Host,
-                                                   Origin,
-                                                   State#state.request_path,
-                                                   SubProto,
-                                                   Sig),
-                    ?DEBUG("Sending handshake response:~p~n",[Res]),
-                    %% send response
-                    case send_text(State, Res) of
-                        ok -> true;
-                        E ->
-                            ?DEBUG("ERROR Sending text:~p~n",[E]),
-                            false
-                    end;
-                false ->
-                    ?ERROR_MSG("Error during handshake verification:~p~n",
-                               [State]),
-                    false
-            end;
-        {error, Res} ->
-            %% report error and close connection by returning false
-            ?ERROR_MSG("Error during handshake:~p~n",[Res]),
-            false;
-        D ->
-            ?DEBUG("Unexpected Data in handshake:~p~n", [D]),
-            false
-    end.
+  %% FIXME: return handshake (Sec-WebSocket-Accept)
+  {_, Key} = lists:keyfind("Sec-Websocket-Key", 1, State#state.request_headers),
+  %%  Hash = jlib:encode_base64(binary_to_list(sha:sha1(Key++"258EAFA5-E914-47DA-95CA-C5AB0DC85B11")))
+  Sha1 = sha:sha1(Key ++ "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"),
+  Hash = jlib:encode_base64(binary_to_list(Sha1)),
+  SubProto = sub_protocol(State#state.request_headers),
+  Res = build_handshake_response(SubProto, Hash),
+  ?INFO_MSG("Sending handshake response:~p~n",[Res]),
+  case send_text(State, Res) of
+    ok -> true;
+    _E -> false
+  end.
+
 process_data(State, Data) ->
-    SockMod = State#state.sockmod,
-    Socket = State#state.socket,
-    RequestHeaders = State#state.request_headers,
-    Host = State#state.request_host,
-    Path = case State#state.request_path of
-               undefined -> ["ws-xmpp"];
-               X -> X
-           end,
-    PeerRet = case SockMod of
-                  gen_tcp ->
-                      inet:peername(Socket);
-                  _ ->
-                      SockMod:peername(Socket)
-              end,
-    IP = case PeerRet of
-             {ok, IPHere} ->
-                 XFF = proplists:get_value('X-Forwarded-For',
-                                           RequestHeaders, []),
-                 analyze_ip_xff(IPHere, XFF, Host);
-             {error, _Error} ->
-                 undefined
-         end,
-    Request = #wsrequest{method = State#state.request_method,
-                         path = Path,
-                         headers = State#state.request_headers,
-                         data = Data,
-                         fsmref = State#state.websocket_pid,
-                         wsocket = Socket,
-                         wsockmod = SockMod,
-                         ip = IP
-                      },
-    process(State#state.request_handlers, Request).
+  SockMod = State#state.sockmod,
+  Socket = State#state.socket,
+  RequestHeaders = State#state.request_headers,
+  Host = State#state.request_host,
+  Path = case State#state.request_path of
+    undefined -> ["ws-xmpp"];
+    X -> X
+  end,
+  PeerRet = case SockMod of
+    gen_tcp -> inet:peername(Socket);
+    _ -> SockMod:peername(Socket)
+  end,
+  IP = case PeerRet of
+    {ok, IPHere} ->
+      XFF = proplists:get_value('X-Forwarded-For',
+          RequestHeaders, []),
+      analyze_ip_xff(IPHere, XFF, Host);
+    {error, _Error} ->
+      undefined
+  end,
+  Request = #wsrequest{method = State#state.request_method,
+      path = Path,
+      headers = State#state.request_headers,
+      data = Data,
+      fsmref = State#state.websocket_pid,
+      wsocket = Socket,
+      wsockmod = SockMod,
+      ip = IP
+  },
+  process(State#state.request_handlers, Request).
 
 process_request(#state{request_method = Method,
-                       request_path = {abs_path, Path},
-		       request_handlers = RequestHandlers,
-		       request_headers = RequestHeaders,
-		       sockmod = SockMod,
-		       socket = Socket
-                      } = State) when Method=:='GET' ->
-    case (catch url_decode_q_split(Path)) of
-        {'EXIT', _} ->
-            process_request(false);
-        {NPath, _Query} ->
-            %% Build Request
-            LPath = [path_decode(NPE) || NPE <- string:tokens(NPath,
-                                                              "/")],
-            Request = #wsrequest{method = Method,
-                                 path = LPath,
-                                 headers = RequestHeaders,
-                                 wsocket = Socket,
-                                 wsockmod = SockMod
-                                },
-            ?INFO_MSG("Processing request:~n~p:~p~n",[Request, State]),
-            process(RequestHandlers, Request)
-    end;
+    request_path = {abs_path, Path},
+    request_handlers = RequestHandlers,
+    request_headers = RequestHeaders,
+    sockmod = SockMod,
+    socket = Socket} = State) when Method=:='GET' ->
+  case (catch url_decode_q_split(Path)) of
+    {'EXIT', _} ->
+      process_request(false);
+    {NPath, _Query} ->
+      %% Build Request
+      LPath = [path_decode(NPE) || NPE <- string:tokens(NPath, "/")],
+      Request = #wsrequest{method = Method,
+          path = LPath,
+          headers = RequestHeaders,
+          wsocket = Socket,
+          wsockmod = SockMod},
+      ?INFO_MSG("Processing request:~n~p:~p~n",[Request, State]),
+      process(RequestHandlers, Request)
+  end;
 process_request(State) ->
-    ?WARNING_MSG("Not a handshake: ~p~n", [State]),
-    false.
+  ?WARNING_MSG("Not a handshake: ~p~n", [State]),
+  false.
 %% process web socket requests, if no handler found return false.
 process([], _) ->
-    false;
+  ?INFO_MSG("process ===== 0 ===== FALSE", []),
+  false;
 process(RequestHandlers, Request) ->
-    [{HandlerPathPrefix, HandlerModule} | HandlersLeft] = RequestHandlers,
-    ?INFO_MSG("PathPrefix ~p, HandlerModule ~p, Left ~p", [HandlerPathPrefix, HandlerModule, HandlersLeft]),
-    case (lists:prefix(HandlerPathPrefix, Request#wsrequest.path) or
-          (HandlerPathPrefix==Request#wsrequest.path)) of
-	true ->
-            ?DEBUG("~p matches ~p",
-                   [Request#wsrequest.path, HandlerPathPrefix]),
-            %% LocalPath is the path "local to the handler", i.e. if
-            %% the handler was registered to handle "/test/" and the
-            %% requested path is "/test/foo/bar", the local path is
-            %% ["foo", "bar"]
-            LocalPath = lists:nthtail(length(HandlerPathPrefix),
-                                      Request#wsrequest.path),
-            HandlerModule:process(LocalPath, Request);
-	false ->
-	    process(HandlersLeft, Request)
-    end.
+  [{HandlerPathPrefix, HandlerModule} | HandlersLeft] = RequestHandlers,
+  ?INFO_MSG("PathPrefix ~p, HandlerModule ~p, Left ~p",
+      [HandlerPathPrefix, HandlerModule, HandlersLeft]),
+  case (lists:prefix(HandlerPathPrefix, Request#wsrequest.path) or
+      (HandlerPathPrefix==Request#wsrequest.path)) of
+    true ->
+      %%?INFO_MSG("~p matches ~p",
+      %%       [Request#wsrequest.path, HandlerPathPrefix]),
+      %% LocalPath is the path "local to the handler", i.e. if
+      %% the handler was registered to handle "/test/" and the
+      %% requested path is "/test/foo/bar", the local path is
+      %% ["foo", "bar"]
+      LocalPath = lists:nthtail(length(HandlerPathPrefix),
+          Request#wsrequest.path),
+      ?INFO_MSG("~p:process(~p, Request)", [HandlerModule, LocalPath]),
+      HandlerModule:process(LocalPath, Request);
+    false ->
+      ?INFO_MSG("process ===== 1 ===== recursive", []),
+      process(HandlersLeft, Request)
+  end.
 %% send data
 send_text(State, Text) ->
-    case catch (State#state.sockmod):send(State#state.socket, Text) of
-        ok -> ok;
-	{error, timeout} ->
-	    ?INFO_MSG("Timeout on ~p:send",[State#state.sockmod]),
-	    exit(normal);
-        Error ->
-	    ?DEBUG("Error in ~p:send: ~p",[State#state.sockmod, Error]),
-	    exit(normal)
-    end.
-%% sign data
-websocket_sign(Part1, Part2, Key3) ->
-    crypto:md5( <<Part1:32/unsigned-integer, Part2:32/unsigned-integer,
-                 Key3/binary>> ).
-%% verify websocket keys
-websocket_verify_keys(Key1, Key2) ->
-    P1 = parse_seckey(Key1),
-    P2 = parse_seckey(Key2),
-    websocket_verify_parsed_sec(P1, P2).
-websocket_verify_parsed_sec({N1,S1}, {N2,S2}) ->
-    case N1 > ?MAXKEY_LENGTH orelse
-        N2 > ?MAXKEY_LENGTH orelse
-        S1 == 0 orelse
-        S2 == 0 of
-        true ->
-            %%  This is a symptom of an attack.
-            false;
-        false ->
-            case N1 rem S1 /= 0 orelse N2 rem S2 /= 0 of
-                true ->
-                    %% This can only happen if the client is not a conforming
-                    %% WebSocket client.
-                    false;
-                false ->
-                    {erlang:round(N1/S1), erlang:round(N2/S2)}
-            end
-    end.
-%% websocket seckey parser:
-%% extract integer by only looking at [0-9]+ in the string
-%% count spaces in the string
-%% returns: {int, numspaces}
-parse_seckey(Str) ->
-    parse_seckey1(Str, {"",0}).
-parse_seckey1("", {NumStr,NumSpaces}) ->
-    {list_to_integer(lists:reverse(NumStr)), NumSpaces};
-parse_seckey1([32|T], {Ret,NumSpaces}) -> % ASCII/dec space
-    parse_seckey1(T, {Ret, 1+NumSpaces});
-parse_seckey1([N|T],  {Ret,NumSpaces}) when N >= $0, N =< $9 ->
-    parse_seckey1(T, {[N|Ret], NumSpaces});
-parse_seckey1([_|T], Acc) ->
-    parse_seckey1(T, Acc).
+  case catch (State#state.sockmod):send(State#state.socket, Text) of
+    ok ->
+      ok;
+    {error, timeout} ->
+      ?INFO_MSG("Timeout on ~p:send",[State#state.sockmod]),
+      exit(normal);
+    Error ->
+      ?ERROR_MSG("Error in ~p:send: ~p",[State#state.sockmod, Error]),
+      exit(normal)
+  end.
 
 %% build the handshake response
-build_handshake_response(Socket, Host, Origin, Path, SubProto, Sig) ->
-    Proto = case Socket of
-                {ssl,_}   -> "wss://";
-                _         -> "ws://"
-            end,
-    SubProtoHeader = case SubProto of
-                         undefined  -> "";
-                         P          -> ["Sec-WebSocket-Protocol: ", P, "\r\n"]
-                     end,
-    {abs_path, APath} = Path,
-    ["HTTP/1.1 101 Web Socket Protocol Handshake\r\n",
-     "Upgrade: WebSocket\r\n",
-     "Connection: Upgrade\r\n",
-     "Sec-WebSocket-Location: ", Proto, Host, APath, "\r\n",
-     "Sec-WebSocket-Origin: ", Origin, "\r\n",
-     SubProtoHeader,
-     "\r\n",
-     <<Sig/binary>>
-    ].
+build_handshake_response(SubProto, Hash) ->
+  SubProtoHeader = case SubProto of
+    undefined -> "";
+    P -> ["Sec-WebSocket-Protocol: ", P, "\r\n"]
+  end,
+  ["HTTP/1.1 101 Switching Protocols\r\n",
+      "Upgrade: websocket\r\n",
+      "Connection: Upgrade\r\n",
+      SubProtoHeader,
+      "Sec-WebSocket-Accept: ", Hash, "\r\n\r\n"
+  ].
+
 sub_protocol(Headers) ->
-    SubProto = case lists:keyfind("Sec-WebSocket-Protocol", 1, Headers) of
-                   {"Sec-WebSocket-Protocol", SubP} -> SubP;
-                   _ -> "xmpp"
-               end,
-    SubProto.
+  SubProto = case lists:keyfind("Sec-WebSocket-Protocol", 1, Headers) of
+    {"Sec-WebSocket-Protocol", SubP} -> SubP;
+    _ -> "xmpp"
+  end,
+  SubProto.
 %% Support for X-Forwarded-From
 analyze_ip_xff(IP, [], _Host) ->
-    IP;
+  IP;
 analyze_ip_xff({IPLast, Port}, XFF, Host) ->
-    [ClientIP | ProxiesIPs] = string:tokens(XFF, ", ")
-	++ [inet_parse:ntoa(IPLast)],
-    TrustedProxies = case ejabberd_config:get_local_option(
-			    {trusted_proxies, Host}) of
-			 undefined -> [];
-			 TPs -> TPs
-		     end,
-    IPClient = case is_ipchain_trusted(ProxiesIPs, TrustedProxies) of
-		   true ->
-		       {ok, IPFirst} = inet_parse:address(ClientIP),
-		       ?DEBUG("The IP ~w was replaced with ~w due to header "
-			      "X-Forwarded-For: ~s", [IPLast, IPFirst, XFF]),
-		       IPFirst;
-		   false ->
-		       IPLast
-	       end,
-    {IPClient, Port}.
+  [ClientIP | ProxiesIPs] = string:tokens(XFF, ", ")
+    ++ [inet_parse:ntoa(IPLast)],
+  TrustedProxies =
+      case ejabberd_config:get_local_option({trusted_proxies, Host}) of
+        undefined -> [];
+        TPs -> TPs
+      end,
+  IPClient = case is_ipchain_trusted(ProxiesIPs, TrustedProxies) of
+    true ->
+      {ok, IPFirst} = inet_parse:address(ClientIP),
+      ?DEBUG("The IP ~w was replaced with ~w due to header "
+          "X-Forwarded-For: ~s", [IPLast, IPFirst, XFF]),
+      IPFirst;
+    false ->
+      IPLast
+  end,
+  {IPClient, Port}.
 is_ipchain_trusted(_UserIPs, all) ->
-    true;
+  true;
 is_ipchain_trusted(UserIPs, TrustedIPs) ->
-    [] == UserIPs -- ["127.0.0.1" | TrustedIPs].
+  [] == UserIPs -- ["127.0.0.1" | TrustedIPs].
 % Code below is taken (with some modifications) from the yaws webserver, which
 % is distributed under the folowing license:
 %

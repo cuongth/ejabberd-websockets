@@ -32,8 +32,6 @@ You may find it convenient to use directly [Strophejs](https://github.com/metaja
 
 To setup a connection :
 <code>
-	// WS_SERVICE should be http://host.tld:5288/ws-xmpp, based on the configuration you chose.
-	// strophe1.1.0
 	connection = new Strophe.Connection("ws://<ip>:5288/ws-xmpp", {protocol: "ws"});
 </code>
 

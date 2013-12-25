@@ -72,7 +72,7 @@ start(Host, Sid, Key, IP) ->
             {error, "Cannot start XMPP, Websocket session"}
     end.
 start_link(Sid, Key, IP) ->
-    ?WARNING_MSG("start_link === ~p, ~p, ~p, ~p", [Sid, Key, IP]),
+    ?WARNING_MSG("start_link === ~p, ~p, ~p", [Sid, Key, IP]),
     gen_fsm:start_link(?MODULE, [Sid, Key, IP], []).
 
 send({xmpp_websocket, FsmRef, _IP}, Packet) ->
