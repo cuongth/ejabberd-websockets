@@ -4,10 +4,10 @@ xmppws.demo = {
   connection: null,
   jid: "",
   appName: 'demo',
-  domainName: '192.168.1.152',
-//  WS: "ws://localhost:8080/",
-  WS: "ws://192.168.1.152:5288/ws-xmpp",
-  BOSH: "http://192.168.1.155:5280/http-bind/",
+  domainName: '192.168.1.179',
+  WS: "ws://192.168.1.179:5000/",
+//  WS: "ws://192.168.1.179:5288/ws-xmpp",
+  BOSH: "http://192.168.1.179:5280/http-bind/",
 
   init: function() {
     xmppws.demo.setup_namespaces();
@@ -56,9 +56,8 @@ xmppws.demo = {
   },
 
   connect: function(chatjid, password) {
-    var conn = new Strophe.WebSocket(xmppws.demo.WS);
-//    var conn = new Strophe.Connection(
-//        {proto: Strophe.WebSocket(xmppws.demo.WS)});
+//    var conn = new Strophe.WebSocket(xmppws.demo.WS);
+    var conn = new Strophe.Connection("ws://192.168.1.179:5000/", {protocol: "ws"});
     xmppws.demo.jid = chatjid+"@"+xmppws.demo.domainName;
     console.log(chatjid + ":" + password);
     conn.connect(xmppws.demo.jid, password, function (status) {

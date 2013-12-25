@@ -177,11 +177,16 @@ process_header(State, Data) ->
 	    throw(http_request_no_host_header);
         {ok, http_eoh} ->
             ?INFO_MSG("end_of_request1 ~p", [State#state.request_headers]),
-            Out = process_request(State),
-            ?INFO_MSG("out = ~p", [Out]),
+%%            Out = process_request(State),
+%%            ?INFO_MSG("out = ~p", [Out]),
             %% Test for web socket
-            case (Out =/= false) and is_websocket_upgrade(State#state.request_headers) of
-                true ->
+            case sec_websocket_version(State) of
+                false ->
+                    ?INFO_MSG("Regular HTTP",[]),
+                    #state{end_of_request = true,
+                           request_handlers = State#state.request_handlers};
+%%            case (Out =/= false) and is_websocket_upgrade(State#state.request_headers) of
+                Ver ->
                     ?INFO_MSG("Websocket! ~p",[Data]),
                     SockMod = State#state.sockmod,
                     Socket = State#state.socket,
@@ -191,7 +196,7 @@ process_header(State, Data) ->
                         _ ->
                             ok
                     end,
-                    ?INFO_MSG("handshake(~n~p~n)", [State]),
+                    ?INFO_MSG("version: ~p~nhandshake(~p)", [Ver, State]),
                     %% handle hand shake
                     case handshake(State) of
                         true ->
@@ -210,11 +215,11 @@ process_header(State, Data) ->
                             ?INFO_MSG("Bad Handshake",[]),
                             #state{end_of_request = true,
                                    request_handlers = State#state.request_handlers}
-                    end;
-                _ ->
-                    ?INFO_MSG("Regular HTTP",[]),
-                    #state{end_of_request = true,
-                           request_handlers = State#state.request_handlers}
+                    end%;
+%                _ ->
+%                    ?INFO_MSG("Regular HTTP",[]),
+%                    #state{end_of_request = true,
+%                           request_handlers = State#state.request_handlers}
             end;
         {error, closed} ->
             ?ERROR_MSG("Socket closed", [State]),
@@ -262,13 +267,21 @@ process_header(State, Data) ->
 add_header(Name, Value, State) ->
     [{Name, Value} | State#state.request_headers].
 
-is_websocket_upgrade(RequestHeaders) ->
-    Connection = {'Connection', "Upgrade"} == lists:keyfind('Connection', 1,
-                                                            RequestHeaders),
+sec_websocket_version(State) ->
+    RequestHeaders = State#state.request_headers,
+    Connection = {'Connection', "Upgrade"} == lists:keyfind(
+            'Connection', 1, RequestHeaders),
     {Up, WS} = lists:keyfind('Upgrade', 1, RequestHeaders),
     Upgrade = {'Upgrade', "websocket"} == {Up, string:to_lower(WS)},
-    ?INFO_MSG("Connection ~p, Upgrade ~p", [Connection, Upgrade]),
-    Connection and Upgrade.
+    case process_request(State) and Connection and Upgrade of
+        false ->
+            false;
+        true ->
+            case lists:keysearch("Sec-WebSocket-Version", 1, RequestHeaders) of
+                false -> false;
+                {value, {_, Version}} -> Version
+            end
+    end.
 
 handshake(State) ->
     SockMod = State#state.sockmod,
